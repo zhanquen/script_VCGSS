@@ -1,0 +1,400 @@
+From Coq Require Import Init.Prelude Unicode.Utf8.
+From mathcomp Require Import all_ssreflect.
+From mathcomp Require Import fingroup.perm. 
+
+Set Implicit Arguments.
+Unset Strict Implicit.
+Unset Printing Implicit Defensive. 
+
+Section VCGforSS.
+Variable k' : nat.
+Definition k := k'.+1. (* unless one slot for auction *) 
+Definition ordSk_predk := Ordinal (ltn_trans (ltnSn k') (ltnSn k)). (* ordinal of k' *)
+Definition ordSk_k := Ordinal (ltnSn k). (* ordinal of k *)
+Definition ordSk_zero := Ordinal (ltn0Sn k). (* ordinal of 0 *)
+Definition pcrs := (k.+1).-tuple nat.
+Variable (v : pcrs) (a: pcrs). 
+Local Notation "'v_ j" := (tnth v j) (at level 10).
+Hypothesis non_increasing_vi: forall i j: 'I_k.+1, i < j -> 'v_ j < 'v_ i. 
+Hypothesis vigeq0: 0 <= 'v_ ordSk_k.
+Fact non_zero_vi_ltnk (i: 'I_k.+1):  i < ordSk_k -> 0 < 'v_ i.
+Proof.
+  move=> ik.
+  apply: (@leq_ltn_trans ('v_ ordSk_k) _ _); first by rewrite vigeq0.
+  exact: non_increasing_vi.
+Qed.  
+
+Local Notation "'a_ j" := (tnth a j) (at level 10).
+
+Hypothesis non_increasing_ai: forall i j: 'I_k.+1, j <= ordSk_k -> i < j -> 'a_ j < 'a_ i.
+Hypothesis zero_perclickrates: 'a_ ordSk_k = 0.
+Fact non_zero_ai_ltnk (i : 'I_k.+1): i < ordSk_k -> 0 < 'a_ i.
+Proof.
+  move=> ik;
+  rewrite -zero_perclickrates.
+  have OrdkleqOrdk : ordSk_k <= ordSk_k by [].
+  exact: non_increasing_ai OrdkleqOrdk ik.
+Qed.
+(* 
+- To simplify the reasoning, k.+1 out of n bidders are considered in the script.
+- The case of equal bidding value is not considered, nor equal per click rate in order
+to avoid the conflict of argmax.
+- When expanding to n-tuple, the k.+1th pcr to nth pcr can be set 0.
+(!) only when n == k.+1 can we set 'v_ k == 0, but this is meaningless 
+*)
+Fact iaddn_modn (n : nat) (i : nat) : i < n.+1 -> (i + n.+1) %% n.+1 = i.
+Proof.
+  by move=> iSn; rewrite modnD //= modnn addn0 modn_small //= leq_gtF //= mul0n subn0. 
+Qed.
+
+Fact ord_pred_subproof n (i : 'I_n) : (i + n).-1 %% n < n.
+Proof. by case: n i => [|n] [m m_lt]//=; rewrite ltn_pmod. Qed.
+
+Definition ord_pred n (i : 'I_n) := Ordinal (ord_pred_subproof i).
+Definition dea (i : 'I_k.+1) := 'a_ (@ord_pred k.+1 i) - 'a_i.
+Fact non_zero_dea (i : 'I_k.+1): ordSk_zero < i -> 0 < dea i.
+Proof.
+  move=> //= igt0; rewrite /dea subn_gt0 non_increasing_ai //.
+    by rewrite //= -ltnS (ltn_ord i).  
+  have predii : i.-1 < i by rewrite ltn_predL //.
+  by rewrite //= -subn1 -addnBAC //; rewrite subn1 iaddn_modn //;
+  rewrite (ltn_trans predii (ltn_ord i)).
+Qed.
+
+Definition F (i : 'I_k.+1) := 'v_ i * dea i.
+
+Definition pmula (i : 'I_k.+1) := \sum_(j < k.+1 |i < j) F j.
+
+Fact ltn_trans n m p : m < n -> n < p -> m < p.
+Proof. by move=> lt_mn /ltnW; apply: leq_trans. Qed.
+
+Lemma big_ordK : 
+ ∀ (R : Type) (idx : R) (op : R → R → R) (n : nat) (P : pred 'I_n.+1) (F : 'I_n.+1 → R),
+   \big[op/idx]_(i < n.+1 | P i) F i = \big[op/idx]_(0 <= i < n.+1 | P (inord i)) F (inord i). 
+Proof.
+move=> R idx op n P F. 
+rewrite big_mkord [RHS](eq_big P F) // => [i|i _ ]; 
+ first by congr P; apply: val_inj => /=; rewrite inordK.
+by congr F; apply: val_inj => /=; rewrite inordK.
+Qed.
+
+Lemma big_ordK_narrow_rangel : 
+∀  (R : Type) (idx : R) (op : Monoid.law idx)  (n : nat) (lb : 'I_n.+1) (F : 'I_n.+1 → R),
+ \big[op/idx]_(i < n.+1 | lb < i) F i
+ = \big[op/idx]_(lb.+1 <= i < n.+1) F (inord i).
+Proof.
+ move=> R idx op n lb F.
+ rewrite big_ordK
+ (@congr_big_nat _ _ _ 
+   0 n.+1 0 n.+1 
+   (fun i0 : nat => lb < inord i0) 
+   (fun i0 : nat => (true && (lb < i0)))  (* 'true' as a pre for 'big_nat_widenl' *)
+   _ 
+   (fun i0 : nat => F (inord i0))
+   ) //; last first.
+ - move=> i rangei.
+   move/andP: rangei => [rangeil rangeir].
+   by rewrite //= (inordK rangeir).
+ - by rewrite -(big_nat_widenl lb.+1 0).
+Qed.
+
+
+Lemma lemma1point2_a (i : 'I_k.+1) (h : i.+1 < k.+1):  i < ordSk_predk -> pmula i < 'v_ (Ordinal h) * 'a_ i.
+Proof.
+  set Si := (Ordinal h).
+  move=> /= ik'.
+  pose MID := \sum_(j < k.+1 | i < j) 'v_ Si * dea j.
+  (* LHS < MID <= RHS -> LHS < MID *)
+
+  have pmula_i_lt_MID : pmula i < MID. 
+    rewrite -subn_gt0 /pmula /MID. (* write definition *)
+    rewrite -sumnB => [|j ij]; last first. (* \sum ai - \sum bi = \sum (ai - bi)*)
+      rewrite /(F j). (* write definition *)
+      rewrite leq_mul2r; apply/orP; right; rewrite leq_eqVlt.
+      have [] := boolP (Si == j); (* split case Si == j and Si >< j*)
+        first by move/eqP => caseSieqj; rewrite {} caseSieqj; apply/orP; left.
+      move=> /= caseSineqj; apply/orP; right.
+      apply: non_increasing_vi.
+      by rewrite //= ltn_neqAle; exact/andP.
+      (* (i.+1 < j) == (i < j) && (i.+1 != j) *)
+
+    rewrite (bigD1 Si) /(F Si) //= subnn add0n (* elim the first zero term *)
+    (@eq_bigl _ _ _ _ _ 
+    (fun i0 : 'I_k.+1 => (i < i0) && (i0 != Si)) (* transfer P1 *)
+    (fun i0 : 'I_k.+1 => Si < i0)). (* to P2 *)  
+    (* prove the goal with P2 gt0 *)
+      rewrite lt0n; apply/negP; rewrite sum_nat_eq0 /F; apply: negP;
+      rewrite negb_forall; apply/existsP.
+       (* to proof the sum gt0, at least one term gt0 *)
+      exists ordSk_k; rewrite negb_imply.
+      apply/andP; split; [by rewrite //=| rewrite -lt0n].           
+      rewrite -mulnBl muln_gt0; apply/andP; split; 
+      first by rewrite subn_gt0 non_increasing_vi.
+      exact: non_zero_dea.      
+    (* prove func P1 1= P2 *)
+    move=> j /=.
+    rewrite -(inj_eq val_inj) /=  (* (x == y) = (val x == val y) *)
+    leq_eqVlt 
+    Bool.andb_orb_distrib_l (* Search bool "dist". *)
+    eq_sym andbN orFb. (* Search ((_ || _) && _). *) (* Search (_ && _ = _). *)
+    by case li1j: (i.+1 < j); first by rewrite gtn_eqF //=.
+    
+  have MID_eq_vsucmula: MID = 'v_ Si * 'a_ i.
+    apply/eqP;
+    rewrite /MID -big_distrr //=. (* separate 'v_ Si from MID *)
+    rewrite eqn_pmul2l; last by apply: non_zero_vi_ltnk.  (* eliminate 'v_ Si *) 
+    rewrite /dea //= big_ordK_narrow_rangel // (tnth_nth 0) big_nat_cond //=.
+    under eq_bigr=>  j /andP [/andP [_ jK1] ij]. 
+      rewrite !(tnth_nth 0) /= !inordK //.
+    over.
+    rewrite //=.   (* rewrite definition *)
+    under eq_bigr=> i0 rangei0. 
+      move/andP: rangei0 => [/andP[rangei0l rangei0r] _];
+      rewrite -subn1 -addnBAC; last by rewrite (leq_ltn_trans (leq0n i) rangei0l).
+      rewrite subn1  (@iaddn_modn k i0.-1); 
+        last by rewrite(leq_ltn_trans (leq_pred i0) rangei0r).
+    over. (* mod simplification *)
+    rewrite -big_nat_cond.
+    (* sum telescope *)
+    rewrite
+    (@telescope_big _ _ _ (fun x y => nth 0 a x.-1 - nth 0 a y.-1) _ _); last first.
+    (* prep for telescope*)    
+      move=> k0; move/andP=> [rangek0l rangek0r]; 
+      have k0Sk : k0.-1 < k.+1 by rewrite (leq_ltn_trans (leq_pred k0) rangek0r).
+      rewrite //= addnBA.
+        rewrite -subnA //; first by rewrite subnn subn0.      
+        by rewrite -tnth_nth -(@tnth_nth _ _ _ _ (Ordinal k0Sk)); apply/ltnW; 
+        rewrite (@non_increasing_ai i (Ordinal k0Sk)) //= ltn_predRL rangek0l.      
+      apply/ltnW; rewrite -(@tnth_nth _ _ _ _ (Ordinal k0Sk))
+      -(@tnth_nth _ _ _ _ (Ordinal rangek0r)).
+      rewrite (@non_increasing_ai (Ordinal k0Sk) (Ordinal rangek0r)) //=.
+      by rewrite //= ltn_predL (ltn_trans (ltn0Sn i) rangek0l).
+    rewrite -(ltn_add2r 1) !addn1 in ik'.
+    have Si_ltn_k : i.+1 < k by rewrite ik'.
+    have Si_ltn_Sk : i.+1 < k.+1 by rewrite (ltn_trans Si_ltn_k (ltnSn k)).
+    rewrite Si_ltn_Sk //=.
+    rewrite -(@tnth_nth _ _ _ _ ordSk_k).
+    by rewrite zero_perclickrates subn0.
+
+  by rewrite -MID_eq_vsucmula pmula_i_lt_MID.
+Qed.
+
+Lemma lemma1point2_a_tail (i : 'I_k.+1) (h : i.+1 < k.+1):  i == ordSk_predk -> pmula i == 'v_ (Ordinal h) * 'a_ i.
+Proof.
+  set Si := (Ordinal h).
+  move/eqP => i_eq_predk; apply/eqP. (* bool equality to prior equality *)  
+  rewrite !i_eq_predk /pmula big_ordK_narrow_rangel //=. (* rewrite definition *)  
+  rewrite big_ltn // big_geq //= addn0.
+  rewrite /F.
+  have Si_eq_k : Si = inord k'.+1 by rewrite /Si; apply /eqP;
+    rewrite -(inj_eq val_inj) //= -addn1 i_eq_predk inordK // -(@addn1 k') eqn_add2r.
+  have eq_ordk : inord k'.+1 = ordSk_k
+    by apply/eqP;rewrite -(inj_eq val_inj) //= inordK //.
+  rewrite {} Si_eq_k eq_ordk /dea.
+  rewrite zero_perclickrates subn0.
+  have eq_predk : (ord_pred ordSk_k) = ordSk_predk
+  by apply/eqP;
+  rewrite -(inj_eq val_inj) //= modnD //   modnn addn0  modn_small //
+    /k (leq_gtF (leqnSn k')) /nat_of_bool mul0n subn0.
+  by rewrite {} eq_predk.
+Qed.
+
+
+Lemma lemma1point2_b  (i : 'I_k.+1) (h' : i.+1 < k.+1) : i < ordSk_predk -> pmula i > pmula (Ordinal h').
+Proof.
+  set Si := (Ordinal h').
+  move=> ipredk;
+  rewrite /(pmula i) (bigD1 Si) //=. (* separate the first term of 'pmula i' *)
+  rewrite (@eq_bigl _ _ _ _ _ (fun j : 'I_k.+1 => (i < j) && (j != Si)) (fun j=> Si < j))
+  ; last first. (* simplify the filter condition *)
+    move=> j;rewrite -(inj_eq val_inj) /=.
+    rewrite leq_eqVlt.
+    rewrite Bool.andb_orb_distrib_l eq_sym andbN orFb.
+    by case li1j: (i.+1 < j); first by rewrite gtn_eqF //=.    
+  rewrite -/(pmula Si) addnC -ltn_psubLR; last first.
+    rewrite /F muln_gt0; apply /andP; split; first exact: non_zero_vi_ltnk.
+    exact: non_zero_dea.
+  rewrite subnn
+  /F /dea muln_gt0; apply /andP; split; first exact: non_zero_vi_ltnk.
+  rewrite subn_gt0.
+  rewrite non_increasing_ai; first by []; first by rewrite /=.
+  rewrite //=.
+  rewrite modnD; last by []. (* separate the mod *)
+  rewrite modnn addn0.
+  rewrite !(modn_small (ltn_ord i)).
+  by rewrite (leq_gtF (ltnSE (ltn_ord i))) /nat_of_bool mul0n subn0.
+Qed.
+
+Lemma lemma1point2_b_general (i j : 'I_k.+1) : j < ordSk_k -> i < j -> pmula j < pmula i.
+
+  move: j.
+  elim. (*apply: ordinal_ind *) 
+  elim=> [H0 zeroltnk|j IHj]; first by rewrite //=.
+  move=> SjSk Sjk iSj.
+  have jSk : j < k.+1 by rewrite (ltn_trans (ltnSn j) SjSk).
+  case/boolP: (i < j) => [htrue | hfalse].
+  (* ap j < ap i -> ap i < ap i.+1 -> ap j < ap i.+1 *)
+    have MID : pmula (Ordinal SjSk) < pmula (Ordinal jSk)
+      by rewrite (@lemma1point2_b (Ordinal jSk) SjSk).
+    rewrite (ltn_trans MID) //; exact: IHj.
+  have ieqj_f : i = Ordinal jSk. 
+    by apply/eqP;
+    rewrite -(inj_eq val_inj) //=;
+    rewrite -leqNgt in hfalse;
+    rewrite eqn_leq;
+    apply /andP; split; first by rewrite -ltnS.
+  by rewrite ieqj_f (@lemma1point2_b (Ordinal jSk) SjSk).
+Qed.
+
+(* blocks : case on ordinals *)
+Fact subDnAC m n p : p <= n -> m + n - p = n - p + m.
+Proof. by move=> pn; rewrite addnC -addnBAC. Qed.
+
+Fact ltnva (m n p : 'I_k.+1) : 
+m < n -> p < ordSk_k -> 'v_ n * 'a_ p < 'v_ m * 'a_ p.
+Proof.
+  move=> mn pk; rewrite ltn_pmul2r; last by rewrite non_zero_ai_ltnk.
+  by rewrite non_increasing_vi.
+Qed.
+Lemma lemma1point2_c (i l : 'I_k.+1): i < ordSk_k -> l < ordSk_k -> i < l -> 'v_ i * 'a_ l - pmula l <= 'v_ i * 'a_ i- pmula i.
+Proof.
+(* in a better case, we need to assume i<l and i>l *)
+(* the generated subgoals can be verified with last by lemma2_a*)
+  move=> //= iltnk lltnk iltnl.
+  have SlSk : l.+1 < k.+1 by rewrite //=.
+  have SiSl : i.+1 < l.+1 by rewrite //=.
+  rewrite leq_subRL; last first.
+    move: (iltnk); rewrite //= -(ltn_add2r 1 _ _) !addn1.
+    move=> SiltnSk.
+    have MID_ltn_R : 'v_ (Ordinal SiltnSk) * 'a_ i < 'v_ i * 'a_ i
+      by rewrite ltnva //. 
+      (* search sum == 0, contra*)
+    have iltnpredk : i < ordSk_predk
+      by rewrite //=; move: lltnk; rewrite //= ltnS; move: iltnl; apply: leq_trans.            
+    by apply: ltnW (ltn_trans (lemma1point2_a SiltnSk iltnpredk) MID_ltn_R).
+    (* pmula i < v i.+1 * ai -> v i.+1 < vi => pmula i < vi * ai *)
+    have iSl : i < l.+1 by rewrite (ltn_trans iltnl (ltnSn l)).
+  rewrite addnBA; last first.
+    move: (lltnk); rewrite //= -(ltn_add2r 1 _ _) !addn1.
+    move=> _ //.
+    have MID_ltn_R : 'v_ (Ordinal SlSk) * 'a_ l < 'v_ i * 'a_ l
+      by rewrite ltnva //=.
+    apply/ltnW.
+    (* pal_leq_vSlal -> vlaSl_ltn_vial -> MID_ltn_R*)
+    have pal_leq_vSlal : pmula l <= 'v_ (Ordinal SlSk) * 'a_ l.
+      rewrite leq_eqVlt; apply/orP.
+      case: (l == ordSk_predk) /eqP => [leqpredk|lneqpredk]. (***)
+        left; by rewrite lemma1point2_a_tail //; apply/eqP; rewrite leqpredk.
+      right;rewrite lemma1point2_a; first by [].
+      by rewrite //= ltn_neqAle; apply /andP; split; first
+        by move/eqP: lneqpredk=> lneqpredk; rewrite //= in lneqpredk.
+      
+    have vlaSl_ltn_vial : 'v_ (Ordinal SlSk) * 'a_ l < 'v_ i * 'a_ l
+      by rewrite ltnva //.      
+    by rewrite (leq_ltn_trans pal_leq_vSlal vlaSl_ltn_vial).
+
+  rewrite addnC subDnAC; last by apply: ltnW; rewrite lemma1point2_b_general.    
+  rewrite addnC -leq_subRL; last first. (* move vi * al to RHS *)
+    rewrite leq_pmul2l; last exact : non_zero_vi_ltnk.
+    by apply: ltnW (non_increasing_ai (ltnW lltnk) iltnl).    
+  rewrite -mulnBr /pmula !big_ordK_narrow_rangel //=. (* rewrite definition *)
+  rewrite (@big_cat_nat _ _ _ l.+1 i.+1 k.+1 _ _) //=.
+  rewrite -addnBA //= subnn addn0.
+  pose MID := \sum_(i.+1 <= i0 < l.+1) ('v_ i * dea (inord i0)).
+  (* LHS <= MID <= RHS *)
+  apply: (@leq_trans  MID _ _).
+    rewrite /MID big_nat_cond 
+    (@big_nat_cond _ _ _ _ _ _  (fun x=> 'v_ i * dea (inord x))) /F. (* rewrite definition *)
+    rewrite leq_sum //; (* compare each term *)
+    move=> i0 rangei0; rewrite Bool.andb_true_r in rangei0;
+    move/andP: rangei0 => [rangei0l rangei0r]. 
+    have i0ltnSk : i0 < k.+1 by rewrite (ltn_trans rangei0r SlSk).
+    have ltn0i0 : 0 < i0 by rewrite (leq_ltn_trans (leq0n i) rangei0l).
+    have predi0i0 : i0.-1 < i0 by rewrite ltn_predL ltn0i0.
+    (* i < i0 < l.+1 = (i<i0) && (i0<l.+1)*)
+    rewrite leq_pmul2r; last first.
+      by rewrite non_zero_dea //= inordK //.    
+    rewrite ltnW // non_increasing_vi //;
+    by rewrite //= inordK; last by [].
+    
+  rewrite /MID /dea.
+  (* telescope *)
+  rewrite -big_distrr //=. 
+  rewrite leq_pmul2l; last exact: non_zero_vi_ltnk.
+  rewrite big_nat_cond.
+  under eq_bigr=>  i0 rangei0 .
+     move/andP: rangei0 => [/andP[rangei0l rangei0r] _].
+     have i0ltnSk : i0 < k.+1 by rewrite (ltn_trans rangei0r SlSk).
+     have ltn0i0 : 0 < i0 by rewrite (leq_ltn_trans (leq0n i) rangei0l).
+     rewrite !(tnth_nth 0) /= !inordK // -subn1 -addnBAC // subn1 iaddn_modn;
+       last by rewrite (leq_ltn_trans (leq_pred i0) i0ltnSk).
+  over.
+  rewrite //= -big_nat_cond
+  (@telescope_big _ _ _ (fun x y => nth 0 a x.-1 - nth 0 a y.-1) _ _) //; last first.
+    move=> i0 rangei0; move/andP: rangei0 => [rangei0l rangei0r];
+    have i0ltnSk : i0 < k.+1 by rewrite (ltn_trans rangei0r SlSk).
+    have predi0Sk : i0.-1 < k.+1 by rewrite (leq_ltn_trans (leq_pred i0) i0ltnSk).
+    
+    rewrite //= addnBA.            
+      rewrite -subnA //; first by rewrite subnn subn0.             
+      rewrite -tnth_nth -(@tnth_nth _ _ _ _ (Ordinal predi0Sk)).      
+      by apply/ltnW; rewrite non_increasing_ai //; rewrite //= ltn_predRL rangei0l. 
+    apply/ltnW.
+    rewrite -(@tnth_nth _ _ _ _ (Ordinal i0ltnSk))
+    -(@tnth_nth _ _ _ _ (Ordinal predi0Sk)).    
+    by rewrite 
+    (@non_increasing_ai 
+    (Ordinal predi0Sk) 
+    (Ordinal i0ltnSk) ) //= ltn_predL (leq_ltn_trans (leq0n i.+1) rangei0l).    
+    by rewrite SiSl //= -!tnth_nth.
+Qed.
+
+(* payment of general VCG *)
+Definition welfare_with (i : 'I_k.+1) := \sum_ (j < k.+1 | j < i) ('v_ j * 'a_ j)
+ + \sum_ (j < k.+1 | i < j) ('v_ j * 'a_ j).
+Definition welfare_without (i : 'I_k.+1) := \sum_ (j < k.+1 | j < i) ('v_ j * 'a_ j)
++ \sum_ (j < k.+1 | i < j) ('v_ j * 'a_ (@ord_pred k.+1 j)).
+Lemma general_payment (i : 'I_k.+1)  : i < ordSk_k -> 
+pmula i == (welfare_without i - welfare_with i) .
+Proof.
+  move=> ik.
+  rewrite /welfare_without /welfare_with.
+  rewrite subnDl.
+  rewrite -sumnB => [|i0 ii0]; last first.
+  have predi0Sk : i0.-1 < k.+1 by rewrite (leq_ltn_trans (leq_pred i0) (ltn_ord i0)).
+  have predi0_ltn_i0 : i0.-1 < i0 by rewrite ltn_predL (leq_ltn_trans (leq0n i) ii0).
+  have i0_leq_k : i0 <= ordSk_k by rewrite //= -ltnS ltn_ord.
+  case: (i0 < ordSk_k) /boolP =>[i0k | kleqi0] //.
+    apply/ltnW; rewrite ltn_pmul2l; last exact : non_zero_vi_ltnk.
+    apply: non_increasing_ai; first by apply/ltnW; rewrite i0k.      
+    rewrite //= -subn1 -addnBAC; last by rewrite (leq_ltn_trans (leq0n i) ii0).
+    by rewrite subn1 iaddn_modn.
+    rewrite -subn_gt0  -eqn0Ngt subn_eq0 in kleqi0.
+    have i0eqk: i0 = ordSk_k 
+      by apply/eqP; rewrite -(inj_eq val_inj) //= eqn_leq i0_leq_k kleqi0.
+    by rewrite !i0eqk zero_perclickrates muln0.
+  rewrite /pmula /F.
+  under eq_bigr=> i0 rangei0.
+    rewrite -mulnBr.
+  over.
+  by rewrite  // !big_ordK /dea.
+Qed.
+
+(* Theorem GSPeqVCG *)
+(* Adapt SS to General *)
+Variable (b : pcrs).
+Local Notation "'b_ j" := (tnth b j) (at level 10).
+Hypothesis sortable_b: forall i j: 'I_k.+1, i != j -> 'b_ i != 'b_ j. 
+Hypothesis non_zero_b: forall i : 'I_k.+1, 0 < 'b_ i.
+(* the same hypothesis on (a : pcrs) as an ordered priority slot *)
+Variable (O : finType) (o0 : O).
+Definition bidding := {ffun O -> nat}.
+Definition biddings := k.+1.-tuple bidding.
+Variable (bs : biddings).
+Local Notation "'bidding_ j" := (tnth bs j) (at level 10).
+(* modelize permutation *)
+(* modelize general table *)
+
+End VCGforSS.
+
+
